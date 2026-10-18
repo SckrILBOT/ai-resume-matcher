@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ru" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Resume &amp; ATS Matcher</title>
+  <meta name="description" content="AI-аудит резюме под вакансию: ATS-оценка, ключевые слова, улучшение буллитов и сопроводительное письмо.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23fbbf24'/%3E%3Cpath d='M9 17l5 5 9-12' stroke='%230c0a09' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: {
+      sans: ['Manrope', 'system-ui', 'sans-serif'],
+      mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+    } } } };
+  </script>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/app.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+</head>
+<body class="bg-stone-950 text-stone-300 font-sans antialiased min-h-screen" x-data="matcher()" x-cloak>
+  <a href="#main" class="skip no-print">К содержимому</a>
+  <div class="bg-glow no-print" aria-hidden="true"></div>
+  <div class="bg-noise no-print" aria-hidden="true"></div>
+
+  <div class="relative mx-auto max-w-6xl px-4 sm:px-8">
+    <!-- Top bar -->
+    <header class="flex items-center justify-between py-5 sm:py-7 no-print">
+      <a href="/" class="flex items-center gap-2.5 font-extrabold text-stone-50 tracking-tight">
+        <span class="grid h-8 w-8 place-items-center rounded-xl bg-amber-400 text-stone-950"><i data-lucide="check" class="w-5 h-5" stroke-width="3"></i></span>
+        ATS Matcher
+      </a>
+      <span class="chip"><i data-lucide="sparkles" class="w-3.5 h-3.5 text-amber-400"></i> <span x-text="model">Gemini 3.8 Flash</span></span>
+    </header>
+
+    <!-- HERO (только на экране ввода) -->
+    <div x-show="!loading && !result" class="pt-4 pb-7 sm:pt-8 sm:pb-8 max-w-3xl no-print">
+      <h1 class="text-4xl sm:text-6xl font-extrabold tracking-tight text-stone-50 leading-[1.05] text-balance">
+        Узнайте, пройдёт ли резюме <span class="text-amber-400">ATS‑фильтр</span>
+      </h1>
+      <p class="mt-5 text-base sm:text-lg text-stone-400 max-w-2xl leading-relaxed">
+        Сравним резюме с вакансией, найдём недостающие ключевые слова, перепишем слабые пункты
+        и напишем сопроводительное письмо. Около 15 секунд.
+      </p>
+      <div class="mt-7 flex flex-wrap items-center gap-3">
+        <button type="button" @click="loadDemo()" :disabled="demoLoading" class="btn-cta btn-cta-demo">
+          <span>⚡ Заполнить демо-примером (AI Developer)</span>
+        </button>
+        <span class="text-sm text-stone-400">Увидеть сервис в работе без своих данных</span>
+      </div>
+    </div>
+
+    <main id="main" class="pb-16">
+      <!-- INPUT -->
+      <section x-show="!loading && !result" class="no-print">
+
+        <div class="grid gap-5 lg:grid-cols-2">
+          <!-- 1. Resume -->
+          <div class="card p-5 sm:p-7">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+              <h2 class="step"><span class="step-n" :class="resumeReady && 'step-done'" x-text="resumeReady ? '✓' : '1'">1</span> Резюме</h2>
+              <div class="seg">
+                <button type="button" :class="resumeMode==='pdf' && 'seg-on'" :aria-pressed="resumeMode==='pdf'" @click="resumeMode='pdf'">PDF-файл</button>
+                <button type="button" :class="resumeMode==='text' && 'seg-on'" :aria-pressed="resumeMode==='text'" @click="resumeMode='text'">Текст</button>
+              </div>
+            </div>
+
+            <div x-show="resumeMode==='pdf'">
+              <label for="pdf-input" class="dropzone" :class="dragging && 'dropzone-active'"
+                @dragover.prevent="dragging=true" @dragleave.prevent="dragging=false" @drop.prevent="onDrop($event)">
+                <input id="pdf-input" type="file" accept="application/pdf,.pdf" class="sr-only" @change="onFile($event.target.files[0])">
+                <template x-if="!file">
+                  <div class="text-center px-4">
+                    <span class="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-stone-800 text-amber-400"><i data-lucide="upload" class="w-6 h-6"></i></span>
+                    <p class="font-semibold text-stone-100">Перетащите PDF сюда</p>
+                    <p class="text-sm text-stone-400 mt-1">или нажмите, чтобы выбрать · до 10 МБ</p>
+                  </div>
+                </template>
+                <template x-if="file">
+                  <div class="text-center px-4">
+                    <span class="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-green-400/10 text-green-400"><i data-lucide="file-check-2" class="w-6 h-6"></i></span>
+                    <p class="font-semibold text-stone-100 break-all" x-text="file.name"></p>
+                    <p class="text-sm text-stone-400 mt-1 font-mono" x-text="fileSize"></p>
+                    <button type="button" class="mt-3 text-sm text-stone-400 hover:text-red-300 underline underline-offset-4" @click.prevent="file=null">Убрать файл</button>
+                  </div>
+                </template>
+              </label>
+            </div>
+
+            <div x-show="resumeMode==='text'">
+              <textarea x-model="resumeText" class="field field-fixed" aria-label="Текст резюме" placeholder="Вставьте текст резюме..."></textarea>
+            </div>
+          </div>
+
+          <!-- 2. Job -->
+          <div class="card p-5 sm:p-7">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+              <h2 class="step"><span class="step-n" :class="jobReady && 'step-done'" x-text="jobReady ? '✓' : '2'">2</span> Вакансия</h2>
+              <div class="seg">
+                <button type="button" :class="jobMode==='text' && 'seg-on'" :aria-pressed="jobMode==='text'" @click="jobMode='text'">Текст</button>
+                <button type="button" :class="jobMode==='url' && 'seg-on'" :aria-pressed="jobMode==='url'" @click="jobMode='url'">Ссылка</button>
+              </div>
+            </div>
+
+            <div x-show="jobMode==='text'">
+              <textarea x-model="jobText" class="field field-fixed" aria-label="Описание вакансии" placeholder="Вставьте описание вакансии..."></textarea>
+            </div>
+            <div x-show="jobMode==='url'">
+              <input x-model="jobUrl" aria-label="Ссылка на вакансию" type="url" inputmode="url" class="field" placeholder="https://company.com/jobs/ai-developer">
+              <p class="mt-4 text-sm text-stone-400 leading-relaxed">
+                Сервис сам скачает страницу и вытащит текст вакансии. Если сайт грузится через JavaScript
+                или блокирует ботов (hh.ru, LinkedIn), вставьте текст вручную.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Tone + submit -->
+        <div class="card p-5 sm:p-7 mt-5">
+          <div class="grid gap-6 lg:grid-cols-[1fr,auto] lg:items-end">
+            <div>
+              <h2 class="step mb-4"><span class="step-n">3</span> Тон сопроводительного письма</h2>
+              <div class="grid gap-2 sm:grid-cols-3">
+                <template x-for="t in tones" :key="t">
+                  <button type="button" @click="tone=t" class="tone-btn" :class="tone===t && 'tone-on'" :aria-pressed="tone===t" x-text="t"></button>
+                </template>
+              </div>
+            </div>
+            <button type="button" @click="submit()" :disabled="!canSubmit" class="btn-cta">
+              <i data-lucide="scan-search" class="w-5 h-5"></i> Проанализировать
+            </button>
+          </div>
+
+          <div x-show="error" x-transition class="mt-5 flex items-start gap-3 rounded-2xl border border-red-400/25 bg-red-400/10 p-4 text-sm text-red-200" role="alert">
+            <i data-lucide="alert-triangle" class="w-5 h-5 shrink-0"></i>
+            <span x-text="error"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- LOADING -->
+      <section x-show="loading" class="no-print pt-8 sm:pt-16">
+        <div class="card p-10 sm:p-16 text-center max-w-xl mx-auto">
+          <div class="loader mx-auto mb-7"><span></span><span></span><span></span></div>
+          <p class="text-xl font-bold text-stone-50" role="status" aria-live="polite" x-text="stages[stage]"></p>
+          <div class="mt-6 flex justify-center gap-2">
+            <template x-for="(s, i) in stages" :key="i">
+              <span class="h-1.5 w-12 rounded-full transition-all duration-500" :class="i <= stage ? 'bg-amber-400' : 'bg-stone-800'"></span>
+            </template>
+          </div>
+          <p class="mt-5 text-sm text-stone-400">Обычно это занимает 10–20 секунд</p>
+        </div>
+      </section>
+
+      <!-- DASHBOARD -->
+      <section x-show="result" id="report">
+        <template x-if="result">
+          <div>
+            <div class="mb-6 flex flex-wrap items-center justify-between gap-3 no-print">
+              <button type="button" @click="reset()" class="btn-ghost"><i data-lucide="arrow-left" class="w-4 h-4"></i> Новый анализ</button>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" @click="exportMarkdown()" class="btn-ghost"><i data-lucide="file-down" class="w-4 h-4"></i> Экспорт в Markdown</button>
+                <button type="button" @click="printReport()" class="btn-ghost"><i data-lucide="printer" class="w-4 h-4"></i> Печать / PDF</button>
+              </div>
+            </div>
+
+            <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-stone-50 mb-4">Результат анализа</h1>
+            <nav class="mb-6 flex flex-wrap gap-2 no-print" aria-label="Разделы отчёта">
+              <a href="#sec-keywords" class="chip hover:text-white">Ключевые слова</a>
+              <a href="#sec-bullets" class="chip hover:text-white">Улучшения резюме</a>
+              <a href="#sec-letter" class="chip hover:text-white">Письмо</a>
+            </nav>
+            <div class="grid gap-5 lg:grid-cols-[340px,1fr] lg:items-start">
+              <!-- LEFT: score -->
+              <aside class="card p-6 sm:p-7 lg:sticky lg:top-5">
+                <h2 class="eyebrow text-center">Общее совпадение</h2>
+                <div class="relative mx-auto my-5 h-52 w-52" :class="scoreTone(result.overall_match_score).text">
+                  <svg viewBox="0 0 120 120" class="h-full w-full -rotate-90" role="img" :aria-label="'Общее совпадение ' + result.overall_match_score + ' процентов'">
+                    <circle cx="60" cy="60" r="54" fill="none" stroke="currentColor" stroke-opacity="0.12" stroke-width="7"/>
+                    <circle cx="60" cy="60" r="54" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"
+                      :stroke-dasharray="circumference" :stroke-dashoffset="circumference * (1 - shownScore / 100)"/>
+                  </svg>
+                  <div class="absolute inset-0 flex flex-col items-center justify-center">
+                    <span class="font-mono text-6xl font-bold tabular-nums tracking-tight" x-text="Math.round(shownScore)"></span>
+                    <span class="text-sm font-semibold mt-1 opacity-90" x-text="scoreTone(result.overall_match_score).label"></span>
+                  </div>
+                </div>
+
+                <div class="space-y-5 pt-5 border-t border-stone-800">
+                  <template x-for="c in categories" :key="c.key">
+                    <div>
+                      <div class="flex justify-between items-baseline text-sm mb-2">
+                        <span class="text-stone-300 font-medium" x-text="c.label"></span>
+                        <span class="font-mono font-bold tabular-nums" :class="scoreTone(result.category_scores[c.key]).text" x-text="result.category_scores[c.key] + '%'"></span>
+                      </div>
+                      <div class="h-2 rounded-full bg-stone-800 overflow-hidden">
+                        <div class="h-full rounded-full transition-all duration-1000 ease-out" :class="scoreTone(result.category_scores[c.key]).bg"
+                          :style="'width:' + (barsOn ? result.category_scores[c.key] : 0) + '%'"></div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </aside>
+
+              <!-- RIGHT: details -->
+              <div class="space-y-5 min-w-0">
+                <div class="card p-6 sm:p-7">
+                  <h2 class="eyebrow mb-3"><i data-lucide="bot" class="w-4 h-4"></i> Вердикт AI-рекрутера</h2>
+                  <p class="text-lg sm:text-xl text-stone-100 leading-relaxed font-medium" x-text="result.executive_summary"></p>
+                </div>
+
+                <div id="sec-keywords" class="grid gap-5 sm:grid-cols-2 scroll-mt-6">
+                  <div class="card p-6">
+                    <h2 class="eyebrow mb-4 !text-green-400"><i data-lucide="check-circle-2" class="w-4 h-4"></i> Matched Skills</h2>
+                    <div class="flex flex-wrap gap-2">
+                      <template x-for="k in result.matched_keywords" :key="k"><span class="badge badge-ok" x-text="k"></span></template>
+                      <span x-show="!result.matched_keywords.length" class="text-sm text-stone-400">Совпадений не найдено</span>
+                    </div>
+                  </div>
+                  <div class="card p-6">
+                    <h2 class="eyebrow mb-4 !text-red-400"><i data-lucide="alert-octagon" class="w-4 h-4"></i> Missing Keywords (ATS Alert)</h2>
+                    <div class="flex flex-wrap gap-2">
+                      <template x-for="k in result.missing_keywords" :key="k"><span class="badge badge-bad" x-text="k"></span></template>
+                      <span x-show="!result.missing_keywords.length" class="text-sm text-stone-400">Критичных пробелов нет</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="sec-bullets" class="card p-6 sm:p-7 scroll-mt-6">
+                  <h2 class="eyebrow mb-5"><i data-lucide="wand-2" class="w-4 h-4"></i> Улучшение резюме · было → стало</h2>
+                  <div class="space-y-5">
+                    <template x-for="(b, i) in visibleBullets" :key="i">
+                      <div class="rounded-2xl bg-stone-950/60 border border-stone-800 p-4 sm:p-5">
+                        <div class="grid gap-3">
+                          <div class="pl-4 border-l-2 border-red-400/60">
+                            <p class="text-xs font-bold uppercase tracking-wider text-red-300/90 mb-1">Было</p>
+                            <p class="text-stone-400 leading-relaxed" x-text="b.original_or_weak_point"></p>
+                          </div>
+                          <div class="pl-4 border-l-2 border-green-400">
+                            <div class="flex items-center justify-between mb-1 gap-3">
+                              <p class="text-xs font-bold uppercase tracking-wider text-green-400">Стало</p>
+                              <button type="button" @click="copy(b.improved_bullet, 'b' + i)" class="no-print inline-flex items-center gap-1.5 min-h-[32px] px-2 -my-1.5 -mr-2 text-xs font-semibold text-stone-400 hover:text-amber-300 transition">
+                                <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                                <span x-text="copied === 'b' + i ? 'Скопировано!' : 'Копировать'"></span>
+                              </button>
+                            </div>
+                            <p class="text-stone-50 leading-relaxed font-medium" x-text="b.improved_bullet"></p>
+                          </div>
+                        </div>
+                        <p class="mt-4 flex gap-2 text-sm text-stone-400 leading-relaxed">
+                          <i data-lucide="lightbulb" class="w-4 h-4 shrink-0 mt-0.5 text-amber-400"></i>
+                          <span x-text="b.why_it_works"></span>
+                        </p>
+                      </div>
+                    </template>
+                  </div>
+                  <button type="button" x-show="result.bullet_improvements.length > 2" @click="showAllBullets = !showAllBullets" class="btn-ghost mt-5 no-print"
+                    x-text="showAllBullets ? 'Свернуть' : 'Показать все (' + result.bullet_improvements.length + ')'"></button>
+                </div>
+
+                <div id="sec-letter" class="card p-6 sm:p-7 scroll-mt-6">
+                  <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                    <h2 class="eyebrow"><i data-lucide="mail" class="w-4 h-4"></i> Сопроводительное письмо</h2>
+                    <button type="button" @click="copy(letter, 'letter')" class="btn-demo !py-2 no-print">
+                      <i data-lucide="copy" class="w-4 h-4"></i>
+                      <span x-text="copied === 'letter' ? 'Скопировано!' : 'Скопировать письмо'"></span>
+                    </button>
+                  </div>
+                  <p class="text-sm text-stone-400 mb-3 no-print">Текст можно править прямо здесь.</p>
+                  <textarea x-model="letter" rows="14" class="field letter" aria-label="Текст сопроводительного письма"
+                    @input="autosize($event.target)" x-init="$nextTick(() => autosize($el))"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </section>
+    </main>
+
+    <footer class="border-t border-stone-900 py-8 text-center text-sm text-stone-400 no-print">
+      Резюме и вакансии не сохраняются на сервере
+    </footer>
+  </div>
+</body>
+</html>

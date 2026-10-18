@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Служебные файлы проекта (не для репозитория)
+AUDIT-ux-ui.md
+DESIGN-CRITIQUE.md
+TZ.md
+.claude/
