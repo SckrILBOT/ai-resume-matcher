@@ -7,7 +7,6 @@ PROVIDER_VENDORS = {
     "yandex": "Яндекс",
     "deepseek": "через Яндекс",
     "gigachat": "Сбер",
-    "mimo": "Xiaomi",
 }
 # Подсказки для выбора модели на сайте: (особенность, обычное время ответа)
 PROVIDER_NOTES = {
@@ -15,7 +14,6 @@ PROVIDER_NOTES = {
     "deepseek": ("подробнее, но заметно дольше", "40–90 секунд"),
     "gemini": ("иногда бывает перегружен", "10–30 секунд"),
     "gigachat": ("проще по качеству разбора", "10–20 секунд"),
-    "mimo": ("", "10–30 секунд"),
 }
 
 
@@ -23,7 +21,6 @@ def model_label(model: str) -> str:
     """Человекочитаемое имя модели: gemini-3.8-flash -> Gemini 3.8 Flash, yandexgpt-5.1/latest -> YandexGPT 5.1."""
     special = {
         "gigachat": "GigaChat",
-        "mimo": "MiMo",
         "yandexgpt": "YandexGPT",
         "deepseek": "DeepSeek",
         "aliceai": "Alice AI",
@@ -36,13 +33,10 @@ def model_label(model: str) -> str:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # Цепочка по умолчанию: yandex, gemini, gigachat, mimo. Можно зафиксировать один провайдер.
+    # Цепочка по умолчанию: yandex, gemini, gigachat. Можно зафиксировать один провайдер.
     llm_provider: str = "auto"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.8-flash"
-    mimo_api_key: str = ""
-    mimo_base_url: str = "https://api.xiaomimimo.com/v1"
-    mimo_model: str = "mimo-v2.6-flash"
     # YandexGPT (Yandex AI Studio): API-ключ сервисного аккаунта и идентификатор каталога
     yandex_api_key: str = ""
     yandex_folder_id: str = ""
@@ -76,7 +70,6 @@ class Settings(BaseSettings):
         yandex = bool(self.yandex_api_key.strip() and self.yandex_folder_id.strip())
         return {
             "gemini": bool(self.gemini_api_key.strip()),
-            "mimo": bool(self.mimo_api_key.strip()),
             "yandex": yandex,
             "deepseek": yandex,
             "gigachat": bool(self.gigachat_auth_key.strip()),
@@ -85,7 +78,7 @@ class Settings(BaseSettings):
     def provider_order(self) -> list[str]:
         """Автоматическая цепочка: первый основной, остальные резервные. DeepSeek сюда не входит."""
         configured = self._configured()
-        chain = ["yandex", "gemini", "gigachat", "mimo"]
+        chain = ["yandex", "gemini", "gigachat"]
         choice = self.llm_provider.strip().lower()
         preferred = [choice] if choice in configured else chain
         return [name for name in preferred if configured[name]]
@@ -96,7 +89,6 @@ class Settings(BaseSettings):
 
     def model_for(self, provider: str) -> str:
         models = {
-            "mimo": self.mimo_model,
             "gigachat": self.gigachat_model,
             "yandex": self.yandex_model,
             "deepseek": self.deepseek_model,

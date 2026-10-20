@@ -1,4 +1,4 @@
-"""Провайдеры LLM: Gemini (google-genai), YandexGPT, GigaChat и Xiaomi MiMo.
+"""Провайдеры LLM: Gemini (google-genai), YandexGPT, DeepSeek (через Яндекс) и GigaChat.
 
 Каждый провайдер возвращает текст JSON, а разбор и проверку схемы делает LLMService.
 """
@@ -146,42 +146,6 @@ def chat_content(resp: httpx.Response) -> str:
     if not content:
         raise ValueError("empty response")
     return extract_json(content)
-
-
-class MimoProvider:
-    """Xiaomi MiMo через OpenAI-совместимый /chat/completions.
-
-    Нативной JSON-схемы у MiMo нет (только режим json_object), поэтому схема передаётся
-    в промпте, а ответ проверяется Pydantic.
-    """
-
-    name = "mimo"
-
-    def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        self.model = settings.mimo_model
-        self._base_url = settings.mimo_base_url.rstrip("/")
-        self._api_key = settings.mimo_api_key
-        self._timeout = settings.llm_timeout_s
-        self._transport = transport
-
-    async def generate_json(self, system: str, prompt: str) -> str:
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": with_schema(prompt)}],
-            "temperature": 0.4,
-            "response_format": {"type": "json_object"},
-        }
-        headers = {"Authorization": f"Bearer {self._api_key}", "api-key": self._api_key}
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-                resp = await client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
-        except httpx.TimeoutException as exc:
-            raise ProviderError(self.name, "timeout") from exc
-        except httpx.HTTPError as exc:
-            raise ProviderError(self.name, "unavailable", type(exc).__name__) from exc
-        if resp.status_code >= 400:
-            raise ProviderError(self.name, kind_for_status(resp.status_code), f"HTTP {resp.status_code}")
-        return chat_content(resp)
 
 
 class YandexProvider:
@@ -343,7 +307,6 @@ class GigaChatProvider:
 
 
 PROVIDER_FACTORIES = {
-    "mimo": MimoProvider,
     "gemini": GeminiProvider,
     "yandex": YandexProvider,
     "deepseek": DeepSeekProvider,

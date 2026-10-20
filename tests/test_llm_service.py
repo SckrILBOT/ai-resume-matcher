@@ -6,7 +6,7 @@ import pytest
 from app.config import Settings
 from app.errors import AppError
 from app.schemas.analysis import Tone
-from app.services.llm_providers import MimoProvider, ProviderError, extract_json
+from app.services.llm_providers import ProviderError, extract_json
 from app.services.llm_service import LLMService
 
 VALID = json.dumps({
@@ -49,7 +49,7 @@ async def test_retry_after_transient_error():
 
 
 async def test_fallback_to_second_provider():
-    down = FakeProvider("mimo", [ProviderError("mimo", "unavailable")] * 2)
+    down = FakeProvider("yandex", [ProviderError("yandex", "unavailable")] * 2)
     backup = FakeProvider("gemini", [VALID])
     result = await service(down, backup).analyze("cv", "job", Tone.CONCISE)
     # с запасным провайдером повтора нет: сразу переход
@@ -65,26 +65,26 @@ async def test_last_provider_still_retries():
 
 
 async def test_config_error_skips_retry_and_falls_back():
-    bad_key = FakeProvider("mimo", [ProviderError("mimo", "config")])
+    bad_key = FakeProvider("yandex", [ProviderError("yandex", "config")])
     backup = FakeProvider("gemini", [VALID])
     await service(bad_key, backup).analyze("cv", "job", Tone.CONCISE)
     assert bad_key.calls == 1
 
 
 async def test_billing_error_falls_back_without_retry():
-    broke = FakeProvider("mimo", [ProviderError("mimo", "billing")])
+    broke = FakeProvider("yandex", [ProviderError("yandex", "billing")])
     backup = FakeProvider("gemini", [VALID])
     await service(broke, backup).analyze("cv", "job", Tone.CONCISE)
     assert broke.calls == 1 and backup.calls == 1
 
 
 async def test_invalid_json_then_valid():
-    p = FakeProvider("mimo", ["not json", VALID])
+    p = FakeProvider("yandex", ["not json", VALID])
     assert (await service(p).analyze("cv", "job", Tone.CONCISE)).result.overall_match_score == 70
 
 
 async def test_all_fail_quota_error():
-    a = FakeProvider("mimo", [ProviderError("mimo", "quota")] * 2)
+    a = FakeProvider("yandex", [ProviderError("yandex", "quota")] * 2)
     b = FakeProvider("gemini", [ProviderError("gemini", "config")])
     with pytest.raises(AppError) as e:
         await service(a, b).analyze("cv", "job", Tone.CONCISE)
@@ -101,9 +101,9 @@ async def test_no_providers():
     "env, expected",
     [
         ({"gemini_api_key": "g"}, ["gemini"]),
-        ({"mimo_api_key": "m"}, ["mimo"]),
-        ({"gemini_api_key": "g", "mimo_api_key": "m"}, ["gemini", "mimo"]),
-        ({"gemini_api_key": "g", "mimo_api_key": "m", "llm_provider": "gemini"}, ["gemini"]),
+        ({"gigachat_auth_key": "k"}, ["gigachat"]),
+        ({"gemini_api_key": "g", "gigachat_auth_key": "k"}, ["gemini", "gigachat"]),
+        ({"gemini_api_key": "g", "gigachat_auth_key": "k", "llm_provider": "gemini"}, ["gemini"]),
         ({}, []),
     ],
 )
@@ -114,36 +114,6 @@ def test_provider_order(env, expected):
 def test_extract_json_strips_fences_and_thinking():
     raw = "<think>план {x}</think>\n```json\n{\"a\": 1}\n```"
     assert json.loads(extract_json(raw)) == {"a": 1}
-
-
-def mimo(handler):
-    s = Settings(_env_file=None, mimo_api_key="secret", mimo_model="mimo-test")
-    return MimoProvider(s, transport=httpx.MockTransport(handler))
-
-
-async def test_mimo_request_and_response():
-    seen = {}
-
-    def handler(request):
-        seen["url"] = str(request.url)
-        seen["auth"] = request.headers["authorization"]
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"choices": [{"message": {"content": "```json\n" + VALID + "\n```"}}]})
-
-    text = await mimo(handler).generate_json("system", "prompt")
-    assert json.loads(text)["overall_match_score"] == 70
-    assert seen["url"].endswith("/v1/chat/completions")
-    assert seen["auth"] == "Bearer secret"
-    assert seen["body"]["model"] == "mimo-test"
-    assert seen["body"]["response_format"] == {"type": "json_object"}
-    assert "overall_match_score" in seen["body"]["messages"][1]["content"]  # схема в промпте
-
-
-@pytest.mark.parametrize("status, kind", [(429, "quota"), (402, "billing"), (503, "unavailable"), (401, "config")])
-async def test_mimo_error_mapping(status, kind):
-    with pytest.raises(ProviderError) as e:
-        await mimo(lambda r: httpx.Response(status, json={})).generate_json("s", "p")
-    assert e.value.kind == kind
 
 
 # ---------- GigaChat ----------
@@ -234,7 +204,7 @@ def test_model_labels_and_roles():
     from app.config import model_label
     assert model_label("gemini-3.8-flash") == "Gemini 3.8 Flash"
     assert model_label("GigaChat-2-Max") == "GigaChat 2 Max"
-    assert model_label("mimo-v2.6-flash") == "MiMo V2.6 Flash"
+    assert model_label("yandexgpt-5.1/latest") == "YandexGPT 5.1"
     info = Settings(_env_file=None, gemini_api_key="g", gigachat_auth_key="k").models_info()
     assert [(m["label"], m["role"], m["vendor"]) for m in info] == [
         ("Gemini 3.8 Flash", "по умолчанию", "Google"),

@@ -42,7 +42,7 @@
 ## Стек
 
 - **Backend:** Python 3.11+, FastAPI, uvicorn, Pydantic v2, pydantic-settings
-- **LLM:** несколько провайдеров с автопереключением: YandexGPT 5.1 и DeepSeek V4.1 Flash (REST API Яндекса), Google Gemini (SDK `google-genai`, структурированный вывод через `response_schema`), GigaChat (OAuth-токен с кешированием, сертификат НУЦ Минцифры) и Xiaomi MiMo (OpenAI-совместимый API). Для моделей без нативной JSON-схемы формат ответа задаётся примером в промпте, ответ проверяется Pydantic. Повторные запросы при сбоях и переход на запасного провайдера
+- **LLM:** несколько провайдеров с автопереключением: YandexGPT 5.1 и DeepSeek V4.1 Flash (REST API Яндекса), Google Gemini (SDK `google-genai`, структурированный вывод через `response_schema`) и GigaChat (OAuth-токен с кешированием, сертификат НУЦ Минцифры). Для моделей без нативной JSON-схемы формат ответа задаётся примером в промпте, ответ проверяется Pydantic. Повторные запросы при сбоях и переход на запасного провайдера
 - **Документы и веб:** PyMuPDF (чтение PDF), httpx и BeautifulSoup4 (загрузка и очистка страницы вакансии)
 - **Frontend:** HTML, Tailwind CSS, Alpine.js, Lucide Icons, шрифт Onest. Живой фон главного экрана написан на WebGL без библиотек. Логотипы моделей: Яндекс, Gemini и DeepSeek из [lobe-icons](https://github.com/lobehub/lobe-icons) (MIT), GigaChat с официального сайта giga.chat. Без сборки Node.js
 - **Тесты:** pytest, pytest-asyncio. LLM-провайдеры в тестах подменяются заглушками
@@ -57,28 +57,35 @@
 FastAPI  ──►  parser_service: PDF → текст (PyMuPDF), URL → текст (httpx + BeautifulSoup)
    │
    ▼
-llm_service ──► основной провайдер ──► при сбое запасной (YandexGPT, Gemini, GigaChat, MiMo)
+llm_service ──► основной провайдер ──► при сбое запасной (YandexGPT → Gemini → GigaChat)
    │
    ▼
 Проверка ответа (диапазоны 0–100, минимум 3 пункта, один повтор при ошибке) → JSON → дашборд
 ```
 
-Схема ответа описана в `app/schemas/analysis.py`. Gemini получает её напрямую через `response_schema`, GigaChat и MiMo получают пример ответа в промпте. Ответ любого провайдера проверяется одной и той же Pydantic-моделью.
+Схема ответа описана в `app/schemas/analysis.py`. Gemini получает её напрямую через `response_schema`, YandexGPT, DeepSeek и GigaChat получают пример ответа в промпте. Ответ любого провайдера проверяется одной и той же Pydantic-моделью.
 
-### LLM-провайдеры
+### Модели и их особенности
 
-| Провайдер | Роль | Как подключён | Формат ответа |
+| Модель | Роль | Скорость | Как подключена |
 |---|---|---|---|
-| Google Gemini | резервный | SDK `google-genai` | нативная JSON-схема (`response_schema`) |
-| YandexGPT 5.1 (Яндекс) | по умолчанию | REST `foundationModels/v1/completion`, авторизация API-ключом сервисного аккаунта | `jsonObject` + пример в промпте + Pydantic |
-| GigaChat (Сбер) | запасной | REST: OAuth-токен на 30 минут с кешированием, сертификат НУЦ Минцифры | пример в промпте + Pydantic |
-| Xiaomi MiMo | необязательный | OpenAI-совместимый `/chat/completions` | `json_object` + пример в промпте + Pydantic |
+| **YandexGPT 5.1** (Яндекс) | по умолчанию | 5–15 секунд | REST `foundationModels/v1/completion`, API-ключ сервисного аккаунта, `jsonObject` + пример в промпте |
+| **Gemini 3.8 Flash** (Google) | первый резерв | 10–30 секунд | SDK `google-genai`, нативная JSON-схема (`response_schema`) |
+| **GigaChat 2 Max** (Сбер) | второй резерв | 10–20 секунд | REST, OAuth-токен на 30 минут с кешированием, сертификат НУЦ Минцифры |
+| **DeepSeek V4.1 Flash** | только по выбору | 40–90 секунд | тот же REST API и ключ Яндекса, в автоматическую цепочку не входит |
 
-При ошибке 429, 5xx или таймауте запрос сразу переходит к следующему провайдеру, чтобы пользователь не ждал повторов. Последний провайдер в цепочке получает до двух попыток. Используются только провайдеры, для которых задан ключ.
+Как они ведут себя на практике:
+
+- **YandexGPT 5.1** — основная модель. Отвечает быстрее всех, стабильно работает из России и даёт аккуратный разбор: понятные оценки, точные ключевые слова, грамотное письмо на русском.
+- **Gemini** работает нестабильно. Сервис Google заблокирован в России, поэтому запросы с российских серверов часто не проходят, а API-ключи регулярно блокируются, и их приходится перевыпускать. Кроме того, бесплатный тариф бывает перегружен и отвечает ошибкой 429 или 503. Поэтому Gemini стоит в цепочке резервом, а не основной моделью.
+- **GigaChat** работает из России без ограничений, но заметно уступает по качеству разбора. Оценки грубее, рекомендации общие, улучшенные пункты резюме чаще повторяют исходный текст, а не переписывают его с метриками. Используется как последний резерв, чтобы сервис ответил хоть чем-то.
+- **DeepSeek V4.1 Flash** даёт самый подробный разбор, потому что сначала рассуждает, а потом отвечает. Зато отвечает в несколько раз дольше остальных, поэтому включается только вручную, когда важна глубина, а не скорость.
+
+При ошибке 429, 5xx или таймауте запрос сразу переходит к следующей модели, чтобы пользователь не ждал повторов. Последняя модель в цепочке получает до двух попыток. Используются только модели, для которых задан ключ. Если ответила не та модель, которую выбрал пользователь, это отмечено в отчёте.
 
 ## Быстрый старт
 
-Нужен хотя бы один ключ: Gemini API ([Google AI Studio](https://aistudio.google.com/apikey)), YandexGPT ([Yandex AI Studio](https://aistudio.yandex.ru): API-ключ и идентификатор каталога), GigaChat ([developers.sber.ru](https://developers.sber.ru/studio)) или Xiaomi MiMo. Провайдеры без ключа не используются. При нескольких ключах порядок такой: YandexGPT, Gemini, GigaChat, MiMo. DeepSeek V4.1 Flash работает на том же ключе Яндекса, не входит в автоматическую цепочку и доступен только при выборе вручную (отвечает дольше, зато подробнее).
+Нужен хотя бы один ключ. Рекомендуется начать с YandexGPT ([Yandex AI Studio](https://aistudio.yandex.ru): API-ключ и идентификатор каталога). Резервные: Gemini ([Google AI Studio](https://aistudio.google.com/apikey), из России нужен доступ к сервисам Google) и GigaChat ([developers.sber.ru](https://developers.sber.ru/studio)). Модели без ключа не используются. При нескольких ключах порядок такой: YandexGPT, Gemini, GigaChat. DeepSeek V4.1 Flash работает на том же ключе Яндекса и доступен только при выборе вручную.
 
 Для GigaChat нужен корневой сертификат НУЦ Минцифры: он уже лежит в `certs/russian_trusted_root_ca.pem` (подробности в `certs/README.md`).
 
@@ -92,13 +99,12 @@ copy .env.example .env            # macOS / Linux: cp .env.example .env
 В файле `.env` укажите ключ:
 
 ```env
-LLM_PROVIDER=auto            # auto, gemini, yandex, gigachat или mimo
-GEMINI_API_KEY=ваш_ключ
-GEMINI_MODEL=gemini-3.8-flash
-YANDEX_API_KEY=ключ              # необязательно, резервный провайдер
+LLM_PROVIDER=auto                    # auto, yandex, gemini или gigachat
+YANDEX_API_KEY=ключ                  # основная модель (и DeepSeek по выбору)
 YANDEX_FOLDER_ID=идентификатор_каталога
-GIGACHAT_AUTH_KEY=ключ_авторизации   # необязательно, резервный провайдер
-MIMO_API_KEY=ваш_ключ_mimo           # необязательно
+GEMINI_API_KEY=ваш_ключ              # необязательно, первый резерв
+GEMINI_MODEL=gemini-3.8-flash
+GIGACHAT_AUTH_KEY=ключ_авторизации   # необязательно, второй резерв
 ```
 
 Запустите сервер:
@@ -155,7 +161,7 @@ app/
 ├── schemas/analysis.py     модели ответа и схема для LLM
 ├── services/
 │   ├── llm_service.py      промпт ATS-аудитора, повторы и переключение провайдеров
-│   ├── llm_providers.py    Gemini, YandexGPT, GigaChat, MiMo
+│   ├── llm_providers.py    YandexGPT, DeepSeek, Gemini, GigaChat
 │   └── parser_service.py   PDF, загрузка вакансии по ссылке
 ├── demo/demo_data.py       демо-резюме и демо-вакансия
 ├── templates/index.html    разметка страницы
