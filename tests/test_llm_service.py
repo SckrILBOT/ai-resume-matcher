@@ -102,7 +102,7 @@ async def test_no_providers():
     [
         ({"gemini_api_key": "g"}, ["gemini"]),
         ({"mimo_api_key": "m"}, ["mimo"]),
-        ({"gemini_api_key": "g", "mimo_api_key": "m"}, ["mimo", "gemini"]),
+        ({"gemini_api_key": "g", "mimo_api_key": "m"}, ["gemini", "mimo"]),
         ({"gemini_api_key": "g", "mimo_api_key": "m", "llm_provider": "gemini"}, ["gemini"]),
         ({}, []),
     ],
@@ -237,6 +237,128 @@ def test_model_labels_and_roles():
     assert model_label("mimo-v2.6-flash") == "MiMo V2.6 Flash"
     info = Settings(_env_file=None, gemini_api_key="g", gigachat_auth_key="k").models_info()
     assert [(m["label"], m["role"], m["vendor"]) for m in info] == [
-        ("Gemini 3.8 Flash", "основная", "Google"),
+        ("Gemini 3.8 Flash", "по умолчанию", "Google"),
         ("GigaChat 2 Max", "резервная", "Сбер"),
     ]
+
+
+# ---------- YandexGPT ----------
+from app.services.llm_providers import YandexProvider  # noqa: E402
+
+
+def yandex(handler, **over):
+    s = Settings(_env_file=None, yandex_api_key="ykey", yandex_folder_id="b1gfolder", **over)
+    return YandexProvider(s, transport=httpx.MockTransport(handler))
+
+
+async def test_yandex_request_and_response():
+    seen = {}
+
+    def handler(request):
+        seen["auth"] = request.headers["authorization"]
+        seen["folder"] = request.headers["x-folder-id"]
+        seen["body"] = json.loads(request.content)
+        fenced = "```json\n" + VALID + "\n```"
+        reply = {"result": {"alternatives": [{"message": {"role": "assistant", "text": fenced}}]}}
+        return httpx.Response(200, json=reply)
+
+    text = await yandex(handler).generate_json("system", "prompt")
+    assert json.loads(text)["overall_match_score"] == 70
+    assert seen["auth"] == "Api-Key ykey" and seen["folder"] == "b1gfolder"
+    body = seen["body"]
+    assert body["modelUri"] == "gpt://b1gfolder/yandexgpt-5.1/latest"
+    assert body["jsonObject"] is True and body["completionOptions"]["stream"] is False
+    assert [m["role"] for m in body["messages"]] == ["system", "user"]
+    assert "overall_match_score" in body["messages"][1]["text"]
+
+
+async def test_yandex_custom_model_uri():
+    seen = {}
+
+    def handler(request):
+        seen["uri"] = json.loads(request.content)["modelUri"]
+        return httpx.Response(200, json={"result": {"alternatives": [{"message": {"text": VALID}}]}})
+
+    await yandex(handler, yandex_model="aliceai-llm").generate_json("s", "p")
+    assert seen["uri"] == "gpt://b1gfolder/aliceai-llm"
+
+
+@pytest.mark.parametrize("status, kind", [(429, "quota"), (503, "unavailable"), (401, "config"), (403, "config"), (400, "config")])
+async def test_yandex_error_mapping(status, kind):
+    with pytest.raises(ProviderError) as e:
+        await yandex(lambda r: httpx.Response(status, json={})).generate_json("s", "p")
+    assert e.value.kind == kind
+
+
+def test_yandex_is_default_and_deepseek_is_optional():
+    s = Settings(_env_file=None, gemini_api_key="g", yandex_api_key="y", yandex_folder_id="f", gigachat_auth_key="k")
+    assert s.provider_order() == ["yandex", "gemini", "gigachat"]  # DeepSeek не входит в цепочку
+    assert [(m["provider"], m["role"]) for m in s.models_info()] == [
+        ("yandex", "по умолчанию"),
+        ("gemini", "резервная"),
+        ("gigachat", "резервная"),
+        ("deepseek", "по выбору"),
+    ]
+    assert Settings(_env_file=None, gemini_api_key="g").optional_providers() == []
+
+
+def test_yandex_needs_both_key_and_folder():
+    assert Settings(_env_file=None, yandex_api_key="y").provider_order() == []
+    assert Settings(_env_file=None, yandex_folder_id="f").provider_order() == []
+
+
+def test_yandex_labels():
+    from app.config import model_label
+    assert model_label("yandexgpt-5.1/latest") == "YandexGPT 5.1"
+    assert model_label("deepseek-v4.1-flash/latest") == "DeepSeek V4.1 Flash"
+    assert model_label("yandexgpt-lite/latest") == "YandexGPT Lite"
+    assert model_label("aliceai-llm") == "Alice AI LLM"
+
+
+# ---------- Выбор модели пользователем ----------
+from app.services.llm_providers import DeepSeekProvider  # noqa: E402
+
+
+def selectable(*providers, optional=()):
+    return LLMService(Settings(llm_attempts=2), providers=list(providers), optional=list(optional), sleep=no_sleep)
+
+
+async def test_selected_model_goes_first_and_others_remain_fallback():
+    default = FakeProvider("yandex", [VALID])
+    deep = FakeProvider("deepseek", [VALID])
+    svc = selectable(default, optional=[deep])
+    answer = await svc.analyze("cv", "job", Tone.CONCISE, preferred="deepseek")
+    assert answer.provider == "deepseek" and answer.fallback is False
+    assert default.calls == 0
+
+
+async def test_selected_model_failure_falls_back_to_default_chain():
+    default = FakeProvider("yandex", [VALID])
+    deep = FakeProvider("deepseek", [ProviderError("deepseek", "unavailable")])
+    answer = await selectable(default, optional=[deep]).analyze("cv", "job", Tone.CONCISE, preferred="deepseek")
+    assert answer.provider == "yandex" and answer.fallback is True
+
+
+async def test_selecting_chain_provider_moves_it_first():
+    a, b = FakeProvider("yandex", [VALID]), FakeProvider("gemini", [VALID])
+    answer = await selectable(a, b).analyze("cv", "job", Tone.CONCISE, preferred="gemini")
+    assert answer.provider == "gemini" and a.calls == 0
+
+
+async def test_unknown_model_is_rejected():
+    with pytest.raises(AppError) as e:
+        await selectable(FakeProvider("yandex", [VALID])).analyze("cv", "job", Tone.CONCISE, preferred="gpt-9")
+    assert e.value.code == "BAD_MODEL"
+
+
+async def test_deepseek_uses_own_model_and_bigger_token_limit():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"result": {"alternatives": [{"message": {"text": VALID}}]}})
+
+    s = Settings(_env_file=None, yandex_api_key="k", yandex_folder_id="b1gx")
+    await DeepSeekProvider(s, transport=httpx.MockTransport(handler)).generate_json("s", "p")
+    assert seen["body"]["modelUri"] == "gpt://b1gx/deepseek-v4.1-flash/latest"
+    assert seen["body"]["completionOptions"]["maxTokens"] == "8000"

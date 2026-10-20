@@ -1,6 +1,6 @@
 # AI Resume & ATS Matcher
 
-Умный аудитор резюме и генератор сопроводительных писем на базе LLM: **Google Gemini** и **GigaChat** (Сбер) с автоматическим переключением между ними.
+Умный аудитор резюме и генератор сопроводительных писем на базе LLM: **YandexGPT 5.1** (по умолчанию), **Google Gemini**, **GigaChat** (Сбер) и **DeepSeek V4.1 Flash** (по выбору) с автоматическим переключением при сбоях.
 Загрузите резюме (PDF или текст) и вакансию (текст или ссылку). Сервис проведёт ATS-аудит, найдёт пробелы по ключевым словам, перепишет слабые пункты резюме и напишет сопроводительное письмо под конкретную вакансию.
 
 **Живой сайт:** https://ai-resume-matcher-ghdt.onrender.com
@@ -24,7 +24,8 @@
 - **Вакансия по ссылке.** Сервис сам скачивает страницу и извлекает текст. Есть защита от обращений к внутренним адресам.
 - **Демо-режим.** Кнопка «Заполнить демо-примером» подставляет резюме и вакансию AI-разработчика, чтобы сразу увидеть работу сервиса.
 - **Экспорт.** Отчёт в Markdown или печать / сохранение в PDF из браузера.
-- **Надёжность.** Два LLM-провайдера: если Gemini не отвечает, анализ автоматически выполняет GigaChat. Повторные запросы при временных сбоях.
+- **Выбор модели.** В шапке сайта пользователь сам выбирает, какая модель сделает разбор: YandexGPT 5.1, Gemini, GigaChat или DeepSeek. Выбор запоминается в браузере.
+- **Надёжность.** Цепочка по умолчанию: YandexGPT, затем Gemini, затем GigaChat. Если выбранная модель не отвечает, анализ автоматически выполняет следующая, и в отчёте это отмечено.
 - **Прозрачность.** В шапке видно, какая модель основная и какая резервная, а в отчёте указано, какая именно модель сделала разбор.
 
 ## Стек
@@ -45,7 +46,7 @@
 FastAPI  ──►  parser_service: PDF → текст (PyMuPDF), URL → текст (httpx + BeautifulSoup)
    │
    ▼
-llm_service ──► основной провайдер ──► при сбое запасной (Gemini, GigaChat, MiMo)
+llm_service ──► основной провайдер ──► при сбое запасной (YandexGPT, Gemini, GigaChat, MiMo)
    │
    ▼
 Проверка ответа (диапазоны 0–100, минимум 3 пункта, один повтор при ошибке) → JSON → дашборд
@@ -57,7 +58,8 @@ llm_service ──► основной провайдер ──► при сб�
 
 | Провайдер | Роль | Как подключён | Формат ответа |
 |---|---|---|---|
-| Google Gemini | основной | SDK `google-genai` | нативная JSON-схема (`response_schema`) |
+| Google Gemini | резервный | SDK `google-genai` | нативная JSON-схема (`response_schema`) |
+| YandexGPT 5.1 (Яндекс) | по умолчанию | REST `foundationModels/v1/completion`, авторизация API-ключом сервисного аккаунта | `jsonObject` + пример в промпте + Pydantic |
 | GigaChat (Сбер) | запасной | REST: OAuth-токен на 30 минут с кешированием, сертификат НУЦ Минцифры | пример в промпте + Pydantic |
 | Xiaomi MiMo | необязательный | OpenAI-совместимый `/chat/completions` | `json_object` + пример в промпте + Pydantic |
 
@@ -65,7 +67,7 @@ llm_service ──► основной провайдер ──► при сб�
 
 ## Быстрый старт
 
-Нужен хотя бы один ключ: Gemini API ([Google AI Studio](https://aistudio.google.com/apikey)), GigaChat ([developers.sber.ru](https://developers.sber.ru/studio)) или Xiaomi MiMo. Провайдеры без ключа не используются. При нескольких ключах порядок такой: MiMo, Gemini, GigaChat.
+Нужен хотя бы один ключ: Gemini API ([Google AI Studio](https://aistudio.google.com/apikey)), YandexGPT ([Yandex AI Studio](https://aistudio.yandex.ru): API-ключ и идентификатор каталога), GigaChat ([developers.sber.ru](https://developers.sber.ru/studio)) или Xiaomi MiMo. Провайдеры без ключа не используются. При нескольких ключах порядок такой: YandexGPT, Gemini, GigaChat, MiMo. DeepSeek V4.1 Flash работает на том же ключе Яндекса, не входит в автоматическую цепочку и доступен только при выборе вручную (отвечает дольше, зато подробнее).
 
 Для GigaChat нужен корневой сертификат НУЦ Минцифры: он уже лежит в `certs/russian_trusted_root_ca.pem` (подробности в `certs/README.md`).
 
@@ -79,10 +81,12 @@ copy .env.example .env            # macOS / Linux: cp .env.example .env
 В файле `.env` укажите ключ:
 
 ```env
-LLM_PROVIDER=auto            # auto, gemini, gigachat или mimo
+LLM_PROVIDER=auto            # auto, gemini, yandex, gigachat или mimo
 GEMINI_API_KEY=ваш_ключ
 GEMINI_MODEL=gemini-3.8-flash
-GIGACHAT_AUTH_KEY=ключ_авторизации   # необязательно, запасной провайдер
+YANDEX_API_KEY=ключ              # необязательно, резервный провайдер
+YANDEX_FOLDER_ID=идентификатор_каталога
+GIGACHAT_AUTH_KEY=ключ_авторизации   # необязательно, резервный провайдер
 MIMO_API_KEY=ваш_ключ_mimo           # необязательно
 ```
 
@@ -140,7 +144,7 @@ app/
 ├── schemas/analysis.py     модели ответа и схема для LLM
 ├── services/
 │   ├── llm_service.py      промпт ATS-аудитора, повторы и переключение провайдеров
-│   ├── llm_providers.py    Gemini, GigaChat, MiMo
+│   ├── llm_providers.py    Gemini, YandexGPT, GigaChat, MiMo
 │   └── parser_service.py   PDF, загрузка вакансии по ссылке
 ├── demo/demo_data.py       демо-резюме и демо-вакансия
 ├── templates/index.html    разметка страницы

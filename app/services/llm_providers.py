@@ -1,4 +1,4 @@
-"""Провайдеры LLM: Gemini (google-genai), Xiaomi MiMo и GigaChat (chat/completions).
+"""Провайдеры LLM: Gemini (google-genai), YandexGPT, GigaChat и Xiaomi MiMo.
 
 Каждый провайдер возвращает текст JSON, а разбор и проверку схемы делает LLMService.
 """
@@ -184,6 +184,71 @@ class MimoProvider:
         return chat_content(resp)
 
 
+class YandexProvider:
+    """YandexGPT через Yandex AI Studio: нативный REST completion с режимом jsonObject.
+
+    Авторизация по API-ключу сервисного аккаунта, модель задаётся как gpt://<каталог>/<модель>.
+    """
+
+    name = "yandex"
+
+    def __init__(
+        self,
+        settings: Settings,
+        transport: httpx.AsyncBaseTransport | None = None,
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
+        self.model = model or settings.yandex_model
+        self._folder = settings.yandex_folder_id.strip()
+        self._api_key = settings.yandex_api_key
+        self._url = settings.yandex_base_url
+        self._max_tokens = max_tokens or settings.yandex_max_tokens
+        self._timeout = settings.llm_timeout_s
+        self._transport = transport
+
+    async def generate_json(self, system: str, prompt: str) -> str:
+        payload = {
+            "modelUri": f"gpt://{self._folder}/{self.model}",
+            "completionOptions": {"stream": False, "temperature": 0.4, "maxTokens": str(self._max_tokens)},
+            "messages": [
+                {"role": "system", "text": system},
+                {"role": "user", "text": with_schema(prompt)},
+            ],
+            "jsonObject": True,
+        }
+        headers = {"Authorization": f"Api-Key {self._api_key}", "x-folder-id": self._folder}
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                resp = await client.post(self._url, json=payload, headers=headers)
+        except httpx.TimeoutException as exc:
+            raise ProviderError(self.name, "timeout") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(self.name, "unavailable", type(exc).__name__) from exc
+        if resp.status_code >= 400:
+            raise ProviderError(self.name, kind_for_status(resp.status_code), f"HTTP {resp.status_code}")
+        try:
+            text = resp.json()["result"]["alternatives"][0]["message"]["text"]
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            raise ValueError("unexpected Yandex response shape") from exc
+        if not text:
+            raise ValueError("empty response")
+        return extract_json(text)
+
+
+class DeepSeekProvider(YandexProvider):
+    """DeepSeek, размещённый в Yandex AI Studio: тот же аккаунт и ключ, другая модель.
+
+    Модель рассуждает перед ответом, поэтому нужен больший лимит токенов и больше времени.
+    """
+
+    name = "deepseek"
+
+    def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        super().__init__(settings, transport, model=settings.deepseek_model, max_tokens=settings.deepseek_max_tokens)
+
+
 def gigachat_ssl_context(ca_bundle: str) -> ssl.SSLContext:
     """Стандартные корневые сертификаты + сертификат НУЦ Минцифры, которым подписаны серверы GigaChat."""
     ctx = ssl.create_default_context(cafile=certifi.where())
@@ -277,6 +342,20 @@ class GigaChatProvider:
         return chat_content(resp)
 
 
+PROVIDER_FACTORIES = {
+    "mimo": MimoProvider,
+    "gemini": GeminiProvider,
+    "yandex": YandexProvider,
+    "deepseek": DeepSeekProvider,
+    "gigachat": GigaChatProvider,
+}
+
+
 def build_providers(settings: Settings) -> list[LLMProvider]:
-    factories = {"mimo": MimoProvider, "gemini": GeminiProvider, "gigachat": GigaChatProvider}
-    return [factories[name](settings) for name in settings.provider_order()]
+    """Автоматическая цепочка провайдеров."""
+    return [PROVIDER_FACTORIES[name](settings) for name in settings.provider_order()]
+
+
+def build_optional_providers(settings: Settings) -> list[LLMProvider]:
+    """Провайдеры, доступные только по выбору пользователя."""
+    return [PROVIDER_FACTORIES[name](settings) for name in settings.optional_providers()]

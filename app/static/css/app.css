@@ -39,6 +39,13 @@ main, header, footer, .hero { position: relative; z-index: 1; }
   background: var(--card); border: 1px solid var(--line); text-align: left; cursor: default;
 }
 .ai-caption { font-size: .68rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #a8a29e; }
+.ai-select {
+  appearance: none; -webkit-appearance: none; background: transparent; border: 0; padding: 0 1.4rem 0 0; margin: 0;
+  width: 100%; max-width: 15rem; font: inherit; font-size: .875rem; font-weight: 700; color: #fafaf9; cursor: pointer;
+  text-overflow: ellipsis;
+}
+.ai-select:disabled { opacity: .6; cursor: default; }
+.ai-select option { background: #1c1917; color: #fafaf9; }
 .ai-dot { width: .55rem; height: .55rem; border-radius: 9999px; background: #4ade80; box-shadow: 0 0 0 4px rgba(74, 222, 128, .15); flex-shrink: 0; }
 .badge-warn { color: #fcd34d; background: rgba(251, 191, 36, .08); border-color: rgba(251, 191, 36, .3); }
 

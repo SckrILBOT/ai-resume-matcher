@@ -28,6 +28,7 @@ function matcher() {
     letter: '',
     copied: '',
     models: [],
+    selected: '',
     showAllBullets: false,
     shownScore: 0,
     barsOn: false,
@@ -43,20 +44,18 @@ function matcher() {
       this.$watch('error', () => this.icons());
       this.icons();
       fetch('/api/health').then((r) => r.json()).then((d) => {
-        if (Array.isArray(d.models)) this.models = d.models;
+        if (!Array.isArray(d.models)) return;
+        this.models = d.models;
+        let saved = '';
+        try { saved = localStorage.getItem('ats-model') || ''; } catch (e) { /* без сохранения */ }
+        this.selected = this.models.some((m) => m.provider === saved) ? saved : (this.models[0] ? this.models[0].provider : '');
+        this.$watch('selected', (v) => { try { localStorage.setItem('ats-model', v); } catch (e) { /* без сохранения */ } });
+        this.icons();
       }).catch(() => {});
     },
 
-    get primaryModel() {
-      return this.models[0] || { label: 'Gemini 3.8 Flash', vendor: 'Google' };
-    },
-
-    get backupModels() {
-      return this.models.slice(1);
-    },
-
-    get modelsTitle() {
-      return this.models.map((m) => `${m.label} (${m.vendor}): ${m.role}`).join('\n');
+    get selectedModel() {
+      return this.models.find((m) => m.provider === this.selected) || { label: '', vendor: '', note: '', eta: '' };
     },
 
     icons() {
@@ -147,6 +146,7 @@ function matcher() {
 
       const fd = new FormData();
       fd.append('tone', this.tone);
+      if (this.selected) fd.append('model', this.selected);
       if (this.resumeMode === 'pdf') fd.append('resume_file', this.file);
       else fd.append('resume_text', this.resumeText);
       if (this.jobMode === 'text') fd.append('job_text', this.jobText);

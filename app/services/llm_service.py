@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.errors import AppError
 from app.schemas.analysis import AnalysisResult, Tone
-from app.services.llm_providers import LLMProvider, ProviderError, build_providers
+from app.services.llm_providers import LLMProvider, ProviderError, build_optional_providers, build_providers
 
 logger = logging.getLogger("llm")
 
@@ -78,10 +78,14 @@ class LLMService:
         self,
         settings: Settings,
         providers: list[LLMProvider] | None = None,
+        optional: list[LLMProvider] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.settings = settings
         self.providers = build_providers(settings) if providers is None else providers
+        if optional is None:
+            optional = build_optional_providers(settings) if providers is None else []
+        self.optional = optional
         self._sleep = sleep
 
     async def _run_provider(self, provider: LLMProvider, prompt: str, attempts: int) -> AnalysisResult:
@@ -102,16 +106,26 @@ class LLMService:
         assert error is not None
         raise error
 
-    async def analyze(self, resume_text: str, job_text: str, tone: Tone) -> LLMAnswer:
-        if not self.providers:
+    def _order(self, preferred: str | None) -> list[LLMProvider]:
+        """Выбранная пользователем модель идёт первой, дальше автоматическая цепочка."""
+        if not preferred:
+            return self.providers
+        pool = {p.name: p for p in [*self.providers, *self.optional]}
+        if preferred not in pool:
+            raise AppError(400, "Эта модель сейчас недоступна", "BAD_MODEL")
+        return [pool[preferred], *[p for p in self.providers if p.name != preferred]]
+
+    async def analyze(self, resume_text: str, job_text: str, tone: Tone, preferred: str | None = None) -> LLMAnswer:
+        if not self.providers and not self.optional:
             raise AppError(
-                503, "Не задан ключ LLM. Добавьте GEMINI_API_KEY или GIGACHAT_AUTH_KEY в файл .env", "LLM_NOT_CONFIGURED"
+                503, "Не задан ключ LLM. Добавьте ключ YandexGPT, Gemini или GigaChat в файл .env", "LLM_NOT_CONFIGURED"
             )
         prompt = build_user_prompt(resume_text, job_text, tone)
         errors: list[ProviderError] = []
-        for index, provider in enumerate(self.providers):
+        order = self._order(preferred)
+        for index, provider in enumerate(order):
             # При наличии запасного провайдера не ждём повторов: сбой сразу переводит запрос дальше
-            is_last = index == len(self.providers) - 1
+            is_last = index == len(order) - 1
             attempts = max(1, self.settings.llm_attempts) if is_last else 1
             try:
                 result = await self._run_provider(provider, prompt, attempts)

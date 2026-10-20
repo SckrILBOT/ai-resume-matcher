@@ -54,7 +54,7 @@ async def index() -> FileResponse:
 @app.get("/api/health")
 async def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict:
     providers = settings.provider_order()
-    primary = providers[0] if providers else "gemini"
+    primary = providers[0] if providers else "yandex"
     return {
         "status": "ok",
         "model": settings.model_for(primary),
@@ -78,6 +78,7 @@ async def analyze(
     resume_text: Annotated[str, Form()] = "",
     job_text: Annotated[str, Form()] = "",
     job_url: Annotated[str, Form()] = "",
+    model: Annotated[str, Form()] = "",
 ) -> AnalysisResponse:
     started = time.perf_counter()
 
@@ -102,7 +103,7 @@ async def analyze(
     else:
         raise AppError(400, "Вставьте текст вакансии или ссылку на неё", "NO_JOB")
 
-    answer = await llm.analyze(resume, job, tone_enum)
+    answer = await llm.analyze(resume, job, tone_enum, preferred=model.strip() or None)
     logger.info(
         "analyze ok: resume=%s chars, job=%s chars, %.1fs",
         len(resume), len(job), time.perf_counter() - started,

@@ -33,18 +33,21 @@
         <span class="grid h-8 w-8 place-items-center rounded-xl bg-amber-400 text-stone-950"><i data-lucide="check" class="w-5 h-5" stroke-width="3"></i></span>
         ATS Matcher
       </a>
-      <!-- Какие модели ИИ делают разбор: основная и резервные -->
-      <div class="ai-badge" :title="modelsTitle">
+      <!-- Выбор модели ИИ, которая сделает разбор -->
+      <div class="ai-badge" x-show="models.length" x-cloak>
         <span class="ai-dot" aria-hidden="true"></span>
-        <div class="leading-tight">
-          <p class="ai-caption">Анализ делает ИИ</p>
-          <p class="text-sm font-bold text-stone-50 whitespace-nowrap">
-            <span x-text="primaryModel.label">Gemini 3.8 Flash</span>
-            <span class="hidden sm:inline font-medium text-stone-400" x-text="'· ' + primaryModel.vendor">· Google</span>
-          </p>
-          <p class="text-xs text-stone-400" x-show="backupModels.length" x-cloak>
-            резерв: <span class="text-stone-300" x-text="backupModels.map((m) => m.label).join(', ')"></span>
-          </p>
+        <div class="min-w-0 leading-tight">
+          <label for="model-select" class="ai-caption block">Разбор сделает ИИ</label>
+          <div class="relative">
+            <select id="model-select" x-model="selected" :disabled="loading" class="ai-select">
+              <template x-for="m in models" :key="m.provider">
+                <option :value="m.provider" :selected="m.provider === selected"
+                  x-text="m.label + ' · ' + m.vendor + (m.role === 'по умолчанию' ? '' : ' (' + m.role + ')')"></option>
+              </template>
+            </select>
+            <i data-lucide="chevron-down" class="pointer-events-none absolute right-0 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"></i>
+          </div>
+          <p class="text-xs text-stone-400" x-text="selectedModel.note ? selectedModel.note + ' · ' + selectedModel.eta : selectedModel.eta"></p>
         </div>
       </div>
     </header>
@@ -164,7 +167,7 @@
               <span class="h-1.5 w-12 rounded-full transition-all duration-500" :class="i <= stage ? 'bg-amber-400' : 'bg-stone-800'"></span>
             </template>
           </div>
-          <p class="mt-5 text-sm text-stone-400">Обычно это занимает 10–20 секунд</p>
+          <p class="mt-5 text-sm text-stone-400">Модель: <span class="text-stone-200" x-text="selectedModel.label"></span>. Обычно это занимает <span x-text="selectedModel.eta || '10–30 секунд'"></span></p>
         </div>
       </section>
 
@@ -185,7 +188,7 @@
               <i data-lucide="cpu" class="w-4 h-4 text-amber-400"></i>
               <span>Разбор выполнила модель</span>
               <span class="font-semibold text-stone-100" x-text="result.llm && (result.llm.label + ' (' + result.llm.vendor + ')')"></span>
-              <span x-show="result.llm && result.llm.fallback" class="badge badge-warn">резервная: основная модель была недоступна</span>
+              <span x-show="result.llm && result.llm.fallback" class="badge badge-warn">выбранная модель была недоступна, ответила другая</span>
             </p>
             <nav class="mb-6 flex flex-wrap gap-2 no-print" aria-label="Разделы отчёта">
               <a href="#sec-keywords" class="chip hover:text-white">Ключевые слова</a>

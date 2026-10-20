@@ -21,8 +21,8 @@ class FakeLLM:
     def __init__(self):
         self.calls = []
 
-    async def analyze(self, resume, job, tone):
-        self.calls.append((resume, job, tone))
+    async def analyze(self, resume, job, tone, preferred=None):
+        self.calls.append((resume, job, tone, preferred))
         return LLMAnswer(FAKE, "gigachat", "GigaChat-2-Max", fallback=True)
 
 
@@ -64,6 +64,15 @@ def test_analyze_text(client, llm):
     assert r.json()["overall_match_score"] == 82
     assert r.json()["llm"] == {"provider": "gigachat", "vendor": "Сбер", "model": "GigaChat-2-Max", "label": "GigaChat 2 Max", "fallback": True}
     assert llm.calls
+
+
+def test_analyze_passes_selected_model(client, llm):
+    data = {"resume_text": "cv", "job_text": "job", "tone": "Профессиональный", "model": "deepseek"}
+    assert client.post("/api/analyze", data=data).status_code == 200
+    assert llm.calls[-1][3] == "deepseek"
+    data.pop("model")
+    client.post("/api/analyze", data=data)
+    assert llm.calls[-1][3] is None
 
 
 def test_analyze_pdf(client, llm):
