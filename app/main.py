@@ -53,7 +53,14 @@ async def index() -> FileResponse:
 
 @app.get("/api/health")
 async def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict:
-    return {"status": "ok", "model": settings.gemini_model, "llm_configured": settings.llm_configured}
+    providers = settings.provider_order()
+    primary = providers[0] if providers else "gemini"
+    return {
+        "status": "ok",
+        "model": settings.model_for(primary),
+        "providers": providers,
+        "llm_configured": settings.llm_configured,
+    }
 
 
 @app.get("/api/demo")

@@ -43,7 +43,7 @@ function matcher() {
       this.$watch('error', () => this.icons());
       this.icons();
       fetch('/api/health').then((r) => r.json()).then((d) => {
-        if (d.model) this.model = d.model.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        if (d.model) this.model = d.model.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').replace(/^Mimo/, 'MiMo');
       }).catch(() => {});
     },
 

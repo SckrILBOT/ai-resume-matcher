@@ -1,14 +1,13 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
 from pydantic import ValidationError
 
 from app.config import Settings
 from app.errors import AppError
 from app.schemas.analysis import AnalysisResult, Tone
+from app.services.llm_providers import LLMProvider, ProviderError, build_providers
 
 logger = logging.getLogger("llm")
 
@@ -49,51 +48,65 @@ def build_user_prompt(resume_text: str, job_text: str, tone: Tone) -> str:
     )
 
 
+def to_app_error(errors: list[ProviderError]) -> AppError:
+    """Одна понятная ошибка для пользователя по итогам попыток всех провайдеров."""
+    kinds = {e.kind for e in errors}
+    if "quota" in kinds:
+        return AppError(503, "Квота LLM-сервиса исчерпана. Попробуйте позже.", "LLM_QUOTA")
+    if "billing" in kinds:
+        return AppError(503, "Недостаточно средств на балансе LLM-сервиса.", "LLM_BILLING")
+    if "timeout" in kinds:
+        return AppError(504, "Модель не ответила вовремя. Попробуйте ещё раз.", "LLM_TIMEOUT")
+    if "bad_response" in kinds:
+        return AppError(503, "Модель вернула некорректный ответ. Попробуйте ещё раз.", "LLM_BAD_RESPONSE")
+    return AppError(503, "LLM-сервис вернул ошибку. Проверьте ключи и модель.", "LLM_ERROR")
+
+
 class LLMService:
-    def __init__(self, settings: Settings) -> None:
+    """Вызывает провайдеров по очереди: повторы при сбоях, затем переход к запасному."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        providers: list[LLMProvider] | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self.settings = settings
-        self._client: genai.Client | None = None
+        self.providers = build_providers(settings) if providers is None else providers
+        self._sleep = sleep
 
-    @property
-    def client(self) -> genai.Client:
-        if self._client is None:
-            if not self.settings.llm_configured:
-                raise AppError(503, "GEMINI_API_KEY не задан. Добавьте ключ в файл .env", "LLM_NOT_CONFIGURED")
-            self._client = genai.Client(api_key=self.settings.gemini_api_key)
-        return self._client
-
-    async def _generate(self, prompt: str) -> AnalysisResult:
-        response = await asyncio.wait_for(
-            self.client.aio.models.generate_content(
-                model=self.settings.gemini_model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    response_schema=AnalysisResult,
-                    temperature=0.4,
-                ),
-            ),
-            timeout=self.settings.llm_timeout_s,
-        )
-        if not response.text:
-            raise ValueError("empty response")
-        return AnalysisResult.model_validate_json(response.text)
+    async def _run_provider(self, provider: LLMProvider, prompt: str) -> AnalysisResult:
+        attempts = max(1, self.settings.llm_attempts)
+        error: ProviderError | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                text = await provider.generate_json(SYSTEM_PROMPT, prompt)
+                return AnalysisResult.model_validate_json(text)
+            except ProviderError as exc:
+                error = exc
+            except (ValidationError, ValueError):
+                error = ProviderError(provider.name, "bad_response")
+            logger.warning("LLM %s: %s (попытка %s из %s)", provider.name, error.kind, attempt, attempts)
+            if not error.retryable:
+                break
+            if attempt < attempts and error.kind != "bad_response":
+                await self._sleep(self.settings.llm_retry_delay_s * attempt)
+        assert error is not None
+        raise error
 
     async def analyze(self, resume_text: str, job_text: str, tone: Tone) -> AnalysisResult:
+        if not self.providers:
+            raise AppError(
+                503, "Не задан ключ LLM. Добавьте GEMINI_API_KEY или MIMO_API_KEY в файл .env", "LLM_NOT_CONFIGURED"
+            )
         prompt = build_user_prompt(resume_text, job_text, tone)
-        last_error: Exception | None = None
-        for attempt in (1, 2):  # один повтор при невалидном ответе модели
+        errors: list[ProviderError] = []
+        for provider in self.providers:
             try:
-                return await self._generate(prompt)
-            except (ValidationError, ValueError) as exc:
-                logger.warning("Невалидный ответ Gemini (попытка %s): %s", attempt, type(exc).__name__)
-                last_error = exc
-            except asyncio.TimeoutError as exc:
-                raise AppError(504, "Gemini не ответил вовремя. Попробуйте ещё раз.", "LLM_TIMEOUT") from exc
-            except genai_errors.APIError as exc:
-                logger.warning("Ошибка Gemini API: %s", getattr(exc, "code", "?"))
-                if getattr(exc, "code", None) == 429:
-                    raise AppError(503, "Квота Gemini исчерпана. Попробуйте позже.", "LLM_QUOTA") from exc
-                raise AppError(503, "Сервис Gemini вернул ошибку. Проверьте ключ и модель.", "LLM_ERROR") from exc
-        raise AppError(503, "Модель вернула некорректный ответ. Попробуйте ещё раз.", "LLM_BAD_RESPONSE") from last_error
+                result = await self._run_provider(provider, prompt)
+            except ProviderError as exc:
+                errors.append(exc)
+                continue
+            logger.info("LLM ответил: провайдер=%s модель=%s запасной=%s", provider.name, provider.model, bool(errors))
+            return result
+        raise to_app_error(errors)
