@@ -28,7 +28,7 @@
 ## Стек
 
 - **Backend:** Python 3.11+, FastAPI, uvicorn, Pydantic v2, pydantic-settings
-- **LLM:** два провайдера с автопереключением: Google Gemini (SDK `google-genai`, структурированный вывод через `response_schema`) и Xiaomi MiMo (OpenAI-совместимый API, режим `json_object` + проверка схемы Pydantic). Повторные запросы при сбоях и переход на запасного провайдера
+- **LLM:** несколько провайдеров с автопереключением: Google Gemini (SDK `google-genai`, структурированный вывод через `response_schema`), GigaChat (OAuth-токен с кешированием, сертификат НУЦ Минцифры) и Xiaomi MiMo (OpenAI-совместимый API). Для моделей без нативной JSON-схемы схема передаётся в промпте, ответ проверяется Pydantic. Повторные запросы при сбоях и переход на запасного провайдера
 - **Документы и веб:** PyMuPDF (чтение PDF), httpx и BeautifulSoup4 (загрузка и очистка страницы вакансии)
 - **Frontend:** HTML, Tailwind CSS, Alpine.js, Lucide Icons. Без сборки Node.js
 - **Тесты:** pytest, pytest-asyncio. Gemini в тестах подменяется заглушкой
@@ -43,7 +43,7 @@
 FastAPI  ──►  parser_service: PDF → текст (PyMuPDF), URL → текст (httpx + BeautifulSoup)
    │
    ▼
-llm_service ──► основной провайдер (MiMo или Gemini) ──► при сбое запасной
+llm_service ──► основной провайдер ──► при сбое запасной (Gemini, GigaChat, MiMo)
    │
    ▼
 Проверка ответа (диапазоны 0–100, минимум 3 пункта, один повтор при ошибке) → JSON → дашборд
@@ -53,7 +53,9 @@ llm_service ──► основной провайдер (MiMo или Gemini) �
 
 ## Быстрый старт
 
-Нужен хотя бы один ключ: Gemini API ([Google AI Studio](https://aistudio.google.com/apikey)) или Xiaomi MiMo ([платформа MiMo](https://platform.xiaomimimo.com)). Если заданы оба, MiMo работает основным, а Gemini запасным.
+Нужен хотя бы один ключ: Gemini API ([Google AI Studio](https://aistudio.google.com/apikey)), GigaChat ([developers.sber.ru](https://developers.sber.ru/studio)) или Xiaomi MiMo. Провайдеры без ключа не используются. При нескольких ключах порядок такой: MiMo, Gemini, GigaChat.
+
+Для GigaChat дополнительно нужен корневой сертификат НУЦ Минцифры в `certs/russian_trusted_root_ca.pem` (подробности в `certs/README.md`).
 
 ```bash
 python -m venv .venv
@@ -65,11 +67,11 @@ copy .env.example .env            # macOS / Linux: cp .env.example .env
 В файле `.env` укажите ключ:
 
 ```env
-LLM_PROVIDER=auto            # auto, gemini или mimo
+LLM_PROVIDER=auto            # auto, gemini, gigachat или mimo
 GEMINI_API_KEY=ваш_ключ
 GEMINI_MODEL=gemini-3.8-flash
-MIMO_API_KEY=ваш_ключ_mimo   # необязательно
-MIMO_MODEL=mimo-v2.6-flash
+GIGACHAT_AUTH_KEY=ключ_авторизации   # необязательно, запасной провайдер
+MIMO_API_KEY=ваш_ключ_mimo           # необязательно
 ```
 
 Запустите сервер:

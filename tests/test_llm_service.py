@@ -135,3 +135,87 @@ async def test_mimo_error_mapping(status, kind):
     with pytest.raises(ProviderError) as e:
         await mimo(lambda r: httpx.Response(status, json={})).generate_json("s", "p")
     assert e.value.kind == kind
+
+
+# ---------- GigaChat ----------
+from app.services.llm_providers import GigaChatProvider  # noqa: E402
+
+
+def gigachat(handler):
+    s = Settings(_env_file=None, gigachat_auth_key="authkey", gigachat_model="GigaChat-test")
+    return GigaChatProvider(s, transport=httpx.MockTransport(handler))
+
+
+def oauth_ok(expires_at):
+    return httpx.Response(200, json={"access_token": "tok-1", "expires_at": expires_at})
+
+
+async def test_gigachat_token_cached_between_calls():
+    import time
+    calls = {"oauth": 0, "chat": 0}
+
+    def handler(request):
+        if "oauth" in str(request.url):
+            calls["oauth"] += 1
+            assert request.headers["authorization"] == "Basic authkey"
+            assert request.headers["rquid"]
+            assert b"scope=GIGACHAT_API_PERS" in request.content
+            return oauth_ok(int((time.time() + 1800) * 1000))  # миллисекунды
+        calls["chat"] += 1
+        assert request.headers["authorization"] == "Bearer tok-1"
+        assert json.loads(request.content)["model"] == "GigaChat-test"
+        return httpx.Response(200, json={"choices": [{"message": {"content": VALID}}]})
+
+    provider = gigachat(handler)
+    for _ in range(2):
+        assert json.loads(await provider.generate_json("s", "p"))["overall_match_score"] == 70
+    assert calls == {"oauth": 1, "chat": 2}
+
+
+async def test_gigachat_expired_token_refreshed():
+    import time
+    oauth_calls = 0
+
+    def handler(request):
+        nonlocal oauth_calls
+        if "oauth" in str(request.url):
+            oauth_calls += 1
+            return oauth_ok(time.time() + 10)  # истекает раньше запаса в 60 секунд
+        return httpx.Response(200, json={"choices": [{"message": {"content": VALID}}]})
+
+    provider = gigachat(handler)
+    await provider.generate_json("s", "p")
+    await provider.generate_json("s", "p")
+    assert oauth_calls == 2
+
+
+async def test_gigachat_401_drops_token_and_is_retryable():
+    def handler(request):
+        if "oauth" in str(request.url):
+            return oauth_ok(9_999_999_999)
+        return httpx.Response(401, json={})
+
+    provider = gigachat(handler)
+    with pytest.raises(ProviderError) as e:
+        await provider.generate_json("s", "p")
+    assert e.value.retryable and provider._token is None
+
+
+async def test_gigachat_bad_auth_key_is_config_error():
+    provider = gigachat(lambda r: httpx.Response(401, json={}))
+    with pytest.raises(ProviderError) as e:
+        await provider.generate_json("s", "p")
+    assert e.value.kind == "config"
+
+
+def test_gigachat_missing_ca_bundle_is_config_error():
+    s = Settings(_env_file=None, gigachat_auth_key="k", gigachat_ca_bundle="certs/nope.pem")
+    with pytest.raises(ProviderError) as e:
+        GigaChatProvider(s)._client()
+    assert e.value.kind == "config"
+
+
+def test_gigachat_in_provider_order():
+    s = Settings(_env_file=None, gemini_api_key="g", gigachat_auth_key="k")
+    assert s.provider_order() == ["gemini", "gigachat"]
+    assert Settings(_env_file=None, gigachat_auth_key="k", llm_provider="gigachat").provider_order() == ["gigachat"]

@@ -97,7 +97,7 @@ class LLMService:
     async def analyze(self, resume_text: str, job_text: str, tone: Tone) -> AnalysisResult:
         if not self.providers:
             raise AppError(
-                503, "Не задан ключ LLM. Добавьте GEMINI_API_KEY или MIMO_API_KEY в файл .env", "LLM_NOT_CONFIGURED"
+                503, "Не задан ключ LLM. Добавьте GEMINI_API_KEY или GIGACHAT_AUTH_KEY в файл .env", "LLM_NOT_CONFIGURED"
             )
         prompt = build_user_prompt(resume_text, job_text, tone)
         errors: list[ProviderError] = []
