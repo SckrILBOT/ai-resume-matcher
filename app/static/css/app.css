@@ -34,6 +34,14 @@ main, header, footer, .hero { position: relative; z-index: 1; }
   font-size: .8rem; font-weight: 600; color: #d6d3d1; background: var(--card); border: 1px solid var(--line);
 }
 
+.ai-badge {
+  display: flex; align-items: center; gap: .7rem; padding: .5rem .9rem .5rem .75rem; border-radius: 1rem;
+  background: var(--card); border: 1px solid var(--line); text-align: left; cursor: default;
+}
+.ai-caption { font-size: .68rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #a8a29e; }
+.ai-dot { width: .55rem; height: .55rem; border-radius: 9999px; background: #4ade80; box-shadow: 0 0 0 4px rgba(74, 222, 128, .15); flex-shrink: 0; }
+.badge-warn { color: #fcd34d; background: rgba(251, 191, 36, .08); border-color: rgba(251, 191, 36, .3); }
+
 .eyebrow {
   display: flex; align-items: center; gap: .5rem; font-size: .75rem; font-weight: 700;
   letter-spacing: .08em; text-transform: uppercase; color: #a8a29e;

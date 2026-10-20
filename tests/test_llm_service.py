@@ -45,14 +45,23 @@ def service(*providers, attempts=2):
 async def test_retry_after_transient_error():
     p = FakeProvider("gemini", [ProviderError("gemini", "unavailable"), VALID])
     result = await service(p).analyze("cv", "job", Tone.CONCISE)
-    assert result.overall_match_score == 70 and p.calls == 2
+    assert result.result.overall_match_score == 70 and p.calls == 2
 
 
 async def test_fallback_to_second_provider():
     down = FakeProvider("mimo", [ProviderError("mimo", "unavailable")] * 2)
     backup = FakeProvider("gemini", [VALID])
     result = await service(down, backup).analyze("cv", "job", Tone.CONCISE)
-    assert result.overall_match_score == 70 and down.calls == 2 and backup.calls == 1
+    # с запасным провайдером повтора нет: сразу переход
+    assert result.provider == "gemini" and result.fallback is True
+    assert result.result.overall_match_score == 70 and down.calls == 1 and backup.calls == 1
+
+
+async def test_last_provider_still_retries():
+    first = FakeProvider("gemini", [ProviderError("gemini", "unavailable")])
+    last = FakeProvider("gigachat", [ProviderError("gigachat", "unavailable"), VALID])
+    await service(first, last).analyze("cv", "job", Tone.CONCISE)
+    assert first.calls == 1 and last.calls == 2
 
 
 async def test_config_error_skips_retry_and_falls_back():
@@ -71,7 +80,7 @@ async def test_billing_error_falls_back_without_retry():
 
 async def test_invalid_json_then_valid():
     p = FakeProvider("mimo", ["not json", VALID])
-    assert (await service(p).analyze("cv", "job", Tone.CONCISE)).overall_match_score == 70
+    assert (await service(p).analyze("cv", "job", Tone.CONCISE)).result.overall_match_score == 70
 
 
 async def test_all_fail_quota_error():
@@ -219,3 +228,15 @@ def test_gigachat_in_provider_order():
     s = Settings(_env_file=None, gemini_api_key="g", gigachat_auth_key="k")
     assert s.provider_order() == ["gemini", "gigachat"]
     assert Settings(_env_file=None, gigachat_auth_key="k", llm_provider="gigachat").provider_order() == ["gigachat"]
+
+
+def test_model_labels_and_roles():
+    from app.config import model_label
+    assert model_label("gemini-3.8-flash") == "Gemini 3.8 Flash"
+    assert model_label("GigaChat-2-Max") == "GigaChat 2 Max"
+    assert model_label("mimo-v2.6-flash") == "MiMo V2.6 Flash"
+    info = Settings(_env_file=None, gemini_api_key="g", gigachat_auth_key="k").models_info()
+    assert [(m["label"], m["role"], m["vendor"]) for m in info] == [
+        ("Gemini 3.8 Flash", "основная", "Google"),
+        ("GigaChat 2 Max", "резервная", "Сбер"),
+    ]

@@ -35,3 +35,17 @@ class AnalysisResult(BaseModel):
     missing_keywords: list[str] = Field(description="Критичные ключевые слова вакансии, которых нет в резюме")
     bullet_improvements: list[BulletImprovement] = Field(min_length=3)
     cover_letter: str = Field(description="Готовое сопроводительное письмо")
+
+
+class LLMInfo(BaseModel):
+    """Какая модель сделала разбор. Не входит в схему для LLM, добавляется сервером."""
+
+    provider: str
+    vendor: str
+    model: str
+    label: str
+    fallback: bool = Field(description="Ответила резервная модель, потому что основная была недоступна")
+
+
+class AnalysisResponse(AnalysisResult):
+    llm: LLMInfo

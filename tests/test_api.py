@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app, get_llm_service
 from app.schemas.analysis import AnalysisResult
+from app.services.llm_service import LLMAnswer
 
 FAKE = AnalysisResult(
     overall_match_score=82,
@@ -22,7 +23,7 @@ class FakeLLM:
 
     async def analyze(self, resume, job, tone):
         self.calls.append((resume, job, tone))
-        return FAKE
+        return LLMAnswer(FAKE, "gigachat", "GigaChat-2-Max", fallback=True)
 
 
 @pytest.fixture
@@ -61,6 +62,7 @@ def test_analyze_text(client, llm):
     r = client.post("/api/analyze", data={"resume_text": "cv", "job_text": "job", "tone": "Краткий и по делу"})
     assert r.status_code == 200
     assert r.json()["overall_match_score"] == 82
+    assert r.json()["llm"] == {"provider": "gigachat", "vendor": "Сбер", "model": "GigaChat-2-Max", "label": "GigaChat 2 Max", "fallback": True}
     assert llm.calls
 
 

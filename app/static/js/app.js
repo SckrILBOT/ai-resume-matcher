@@ -27,7 +27,7 @@ function matcher() {
     result: null,
     letter: '',
     copied: '',
-    model: 'Gemini 3.8 Flash',
+    models: [],
     showAllBullets: false,
     shownScore: 0,
     barsOn: false,
@@ -43,8 +43,20 @@ function matcher() {
       this.$watch('error', () => this.icons());
       this.icons();
       fetch('/api/health').then((r) => r.json()).then((d) => {
-        if (d.model) this.model = d.model.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').replace(/^Mimo/, 'MiMo');
+        if (Array.isArray(d.models)) this.models = d.models;
       }).catch(() => {});
+    },
+
+    get primaryModel() {
+      return this.models[0] || { label: 'Gemini 3.8 Flash', vendor: 'Google' };
+    },
+
+    get backupModels() {
+      return this.models.slice(1);
+    },
+
+    get modelsTitle() {
+      return this.models.map((m) => `${m.label} (${m.vendor}): ${m.role}`).join('\n');
     },
 
     icons() {
@@ -207,6 +219,8 @@ function matcher() {
         '# Отчёт AI Resume & ATS Matcher',
         '',
         `## Общее совпадение: ${r.overall_match_score}%`,
+        '',
+        r.llm ? `Разбор выполнила модель: ${r.llm.label} (${r.llm.vendor})${r.llm.fallback ? ', резервная' : ''}` : '',
         '',
         `- Hard Skills: ${c.hard_skills_score}%`,
         `- Опыт и проекты: ${c.experience_score}%`,

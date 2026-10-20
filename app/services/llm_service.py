@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 
 from pydantic import ValidationError
@@ -48,6 +49,14 @@ def build_user_prompt(resume_text: str, job_text: str, tone: Tone) -> str:
     )
 
 
+@dataclass
+class LLMAnswer:
+    result: AnalysisResult
+    provider: str
+    model: str
+    fallback: bool
+
+
 def to_app_error(errors: list[ProviderError]) -> AppError:
     """Одна понятная ошибка для пользователя по итогам попыток всех провайдеров."""
     kinds = {e.kind for e in errors}
@@ -63,7 +72,7 @@ def to_app_error(errors: list[ProviderError]) -> AppError:
 
 
 class LLMService:
-    """Вызывает провайдеров по очереди: повторы при сбоях, затем переход к запасному."""
+    """Вызывает провайдеров по очереди: при сбое сразу переходит к запасному, повторы только у последнего."""
 
     def __init__(
         self,
@@ -75,8 +84,7 @@ class LLMService:
         self.providers = build_providers(settings) if providers is None else providers
         self._sleep = sleep
 
-    async def _run_provider(self, provider: LLMProvider, prompt: str) -> AnalysisResult:
-        attempts = max(1, self.settings.llm_attempts)
+    async def _run_provider(self, provider: LLMProvider, prompt: str, attempts: int) -> AnalysisResult:
         error: ProviderError | None = None
         for attempt in range(1, attempts + 1):
             try:
@@ -94,19 +102,22 @@ class LLMService:
         assert error is not None
         raise error
 
-    async def analyze(self, resume_text: str, job_text: str, tone: Tone) -> AnalysisResult:
+    async def analyze(self, resume_text: str, job_text: str, tone: Tone) -> LLMAnswer:
         if not self.providers:
             raise AppError(
                 503, "Не задан ключ LLM. Добавьте GEMINI_API_KEY или GIGACHAT_AUTH_KEY в файл .env", "LLM_NOT_CONFIGURED"
             )
         prompt = build_user_prompt(resume_text, job_text, tone)
         errors: list[ProviderError] = []
-        for provider in self.providers:
+        for index, provider in enumerate(self.providers):
+            # При наличии запасного провайдера не ждём повторов: сбой сразу переводит запрос дальше
+            is_last = index == len(self.providers) - 1
+            attempts = max(1, self.settings.llm_attempts) if is_last else 1
             try:
-                result = await self._run_provider(provider, prompt)
+                result = await self._run_provider(provider, prompt, attempts)
             except ProviderError as exc:
                 errors.append(exc)
                 continue
             logger.info("LLM ответил: провайдер=%s модель=%s запасной=%s", provider.name, provider.model, bool(errors))
-            return result
+            return LLMAnswer(result, provider.name, provider.model, fallback=bool(errors))
         raise to_app_error(errors)

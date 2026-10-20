@@ -9,10 +9,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import Settings, get_settings
+from app.config import PROVIDER_VENDORS, Settings, get_settings, model_label
 from app.demo.demo_data import DEMO_JOB, DEMO_RESUME
 from app.errors import AppError
-from app.schemas.analysis import AnalysisResult, Tone
+from app.schemas.analysis import AnalysisResponse, LLMInfo, Tone
 from app.services.llm_service import LLMService
 from app.services.parser_service import (
     extract_pdf_text,
@@ -59,6 +59,7 @@ async def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict:
         "status": "ok",
         "model": settings.model_for(primary),
         "providers": providers,
+        "models": settings.models_info(),
         "llm_configured": settings.llm_configured,
     }
 
@@ -68,7 +69,7 @@ async def demo() -> dict:
     return {"resume_text": DEMO_RESUME, "job_text": DEMO_JOB}
 
 
-@app.post("/api/analyze", response_model=AnalysisResult)
+@app.post("/api/analyze", response_model=AnalysisResponse)
 async def analyze(
     settings: Annotated[Settings, Depends(get_settings)],
     llm: Annotated[LLMService, Depends(get_llm_service)],
@@ -77,7 +78,7 @@ async def analyze(
     resume_text: Annotated[str, Form()] = "",
     job_text: Annotated[str, Form()] = "",
     job_url: Annotated[str, Form()] = "",
-) -> AnalysisResult:
+) -> AnalysisResponse:
     started = time.perf_counter()
 
     try:
@@ -101,9 +102,16 @@ async def analyze(
     else:
         raise AppError(400, "Вставьте текст вакансии или ссылку на неё", "NO_JOB")
 
-    result = await llm.analyze(resume, job, tone_enum)
+    answer = await llm.analyze(resume, job, tone_enum)
     logger.info(
         "analyze ok: resume=%s chars, job=%s chars, %.1fs",
         len(resume), len(job), time.perf_counter() - started,
     )
-    return result
+    llm_info = LLMInfo(
+        provider=answer.provider,
+        vendor=PROVIDER_VENDORS.get(answer.provider, ""),
+        model=answer.model,
+        label=model_label(answer.model),
+        fallback=answer.fallback,
+    )
+    return AnalysisResponse(**answer.result.model_dump(), llm=llm_info)

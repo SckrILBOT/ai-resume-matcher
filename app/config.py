@@ -1,5 +1,13 @@
 from functools import lru_cache
 
+PROVIDER_VENDORS = {"gemini": "Google", "gigachat": "Сбер", "mimo": "Xiaomi"}
+
+
+def model_label(model: str) -> str:
+    """Человекочитаемое имя модели: gemini-3.8-flash -> Gemini 3.8 Flash, GigaChat-2-Max -> GigaChat 2 Max."""
+    special = {"gigachat": "GigaChat", "mimo": "MiMo"}
+    return " ".join(special.get(part.lower(), part[:1].upper() + part[1:]) for part in model.split("-"))
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,7 +24,7 @@ class Settings(BaseSettings):
     # GigaChat (Сбер): ключ авторизации из личного кабинета, токен получается автоматически
     gigachat_auth_key: str = ""
     gigachat_scope: str = "GIGACHAT_API_PERS"
-    gigachat_model: str = "GigaChat-2"
+    gigachat_model: str = "GigaChat-2-Max"
     gigachat_auth_url: str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     # api.giga.chat из документации не отвечал при проверке; этот адрес работает
     gigachat_base_url: str = "https://gigachat.devices.sberbank.ru/api/v1"
@@ -47,6 +55,19 @@ class Settings(BaseSettings):
 
     def model_for(self, provider: str) -> str:
         return {"mimo": self.mimo_model, "gigachat": self.gigachat_model}.get(provider, self.gemini_model)
+
+    def models_info(self) -> list[dict]:
+        """Модели в порядке использования: первая основная, остальные резервные."""
+        return [
+            {
+                "provider": name,
+                "vendor": PROVIDER_VENDORS[name],
+                "model": self.model_for(name),
+                "label": model_label(self.model_for(name)),
+                "role": "основная" if i == 0 else "резервная",
+            }
+            for i, name in enumerate(self.provider_order())
+        ]
 
     @property
     def llm_configured(self) -> bool:
